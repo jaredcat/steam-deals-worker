@@ -1,0 +1,6 @@
+name = "steam-deals-worker"
+main = "worker.ts"
+compatibility_date = "2026-02-18"
+
+# Required: npx wrangler secret put STEAM_API_KEY
+# Optional: STEAM_ID_TTLS – JSON map of SteamID → TTL seconds, e.g. {"76561198006409530": 86400}

@@ -1,2 +1,22 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Environment and secrets
 .env
+.env.*
+!.env.example
+
+# Wrangler
+.wrangler/
+
+# Build / TypeScript
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
