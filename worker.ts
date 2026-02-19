@@ -263,12 +263,15 @@ async function getCachedJson<T>(
   return { data, fromCache: false };
 }
 
-async function getDeals(
+const DEALS_PAGE_SIZE = 100;
+
+async function getDealsPage(
   params: DealParams,
   workerOrigin: string,
-  dealsTtl: number
+  dealsTtl: number,
+  pageNumber: number
 ): Promise<{ deals: CheapSharkDeal[]; fromCache: boolean }> {
-  const cheapsharkUrl = `https://www.cheapshark.com/api/1.0/deals?storeID=${params.storeIds.join(",")}&pageSize=100&maxAge=${params.maxAge}&metacritic=${params.metacritic}&steamRating=${params.steamRating}&upperPrice=${params.upperPrice}`;
+  const cheapsharkUrl = `https://www.cheapshark.com/api/1.0/deals?storeID=${params.storeIds.join(",")}&pageSize=${DEALS_PAGE_SIZE}&pageNumber=${pageNumber}&maxAge=${params.maxAge}&metacritic=${params.metacritic}&steamRating=${params.steamRating}&upperPrice=${params.upperPrice}`;
 
   const { data, fromCache } = await getCachedJson<CheapSharkDeal[]>(
     getCacheKey(cheapsharkUrl, workerOrigin),
@@ -376,26 +379,48 @@ export default {
     try {
       const workerOrigin = new URL(request.url).origin;
       const [
-        { deals, fromCache: dealsFromCache },
+        { deals: firstPageDeals, fromCache: firstPageFromCache },
         { appIds: ownedAppIds, fromCache: steamFromCache },
       ] = await Promise.all([
-        getDeals(params, workerOrigin, dealsTtlSeconds),
+        getDealsPage(params, workerOrigin, dealsTtlSeconds, 1),
         getOwnedAppIds(env, steamId, workerOrigin),
       ]);
 
-      const filtered = deals.filter(
-        (deal) =>
-          parseFloat(deal.savings) >= params.minSaving &&
-          parseFloat(deal.dealRating) >= params.minDealRating &&
-          !ownedAppIds.has(parseInt(deal.steamAppId, 10))
-      );
+      const filterDeals = (deals: CheapSharkDeal[]) =>
+        deals.filter(
+          (deal) =>
+            parseFloat(deal.savings) >= params.minSaving &&
+            parseFloat(deal.dealRating) >= params.minDealRating &&
+            !ownedAppIds.has(parseInt(deal.steamAppId, 10))
+        );
+
+      let allDeals = [...firstPageDeals];
+      let allFiltered = filterDeals(firstPageDeals);
+      let allDealsFromCache = firstPageFromCache;
+      let pageNumber = 1;
+      let lastPageLength = firstPageDeals.length;
+
+      while (allFiltered.length === 0 && lastPageLength === DEALS_PAGE_SIZE) {
+        pageNumber += 1;
+        const { deals: nextDeals, fromCache: nextFromCache } = await getDealsPage(
+          params,
+          workerOrigin,
+          dealsTtlSeconds,
+          pageNumber
+        );
+        lastPageLength = nextDeals.length;
+        allDealsFromCache = allDealsFromCache && nextFromCache;
+        if (nextDeals.length === 0) break;
+        allDeals = allDeals.concat(nextDeals);
+        allFiltered = filterDeals(allDeals);
+      }
 
       const meta: ResponseMeta = {
         ...baseMeta,
-        cacheHits: { deals: dealsFromCache, steam: steamFromCache },
+        cacheHits: { deals: allDealsFromCache, steam: steamFromCache },
         counts: {
-          totalDeals: deals.length,
-          filteredDeals: filtered.length,
+          totalDeals: allDeals.length,
+          filteredDeals: allFiltered.length,
           ownedAppCount: ownedAppIds.size,
         },
         params: {
@@ -410,12 +435,12 @@ export default {
         },
       };
 
-      if (filtered.length === 0) {
+      if (allFiltered.length === 0) {
         return Response.json({ deal: null, meta });
       }
 
       const randomDeal =
-        filtered[Math.floor(Math.random() * filtered.length)];
+        allFiltered[Math.floor(Math.random() * allFiltered.length)];
 
       return Response.json({ deal: randomDeal, meta });
     } catch (err) {
